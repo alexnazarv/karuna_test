@@ -1,0 +1,10 @@
+id,alert_date,station,msg,alert_status
+1,2021-12-25,a,fail,new
+2,2021-12-26,a,fail,serious
+3,2021-12-29,a,fail,new
+4,2021-12-28,b,fail,new
+5,2021-12-29,b,fail,serious
+6,2021-12-30,b,fail,critical
+7,2021-12-31,b,fail,critical
+8,2021-12-29,c,fail,new
+9,2022-01-01,c,fail,new

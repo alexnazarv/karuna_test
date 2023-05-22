@@ -1,0 +1,141 @@
+version: '3'
+
+networks:
+  airflow_network:
+    driver: bridge
+
+volumes:
+  postgres_airflow_data:
+  postgres_data: 
+  miniovolume:
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.2.5
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@db:5432/airflow
+    - AIRFLOW__CORE__FERNET_KEY=FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM=
+    - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+    - AIRFLOW__CORE__HOME=/opt/airflow/
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./setting/airflow.cfg:/opt/airflow/airflow.cfg
+  networks:
+    - airflow_network
+    
+services:
+  db:
+    image: postgres:13.1
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=airflow
+      - POSTGRES_PORT=5432
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+    - postgres_airflow_data:/var/lib/postgresql/data/pgdata
+    ports:
+      - 5432:5432
+    networks:
+      - airflow_network
+
+  airflow-init:
+    << : *airflow-common
+    container_name: airflow_init
+    entrypoint: /bin/bash
+    command: -c "airflow db init && airflow users create --firstname airflow --lastname airflow --email airflow --password airflow --username airflow --role Admin"
+    restart: on-failure
+    depends_on:
+      - db
+    networks:
+      - airflow_network
+
+  airflow-webserver:
+    << : *airflow-common
+    command: airflow webserver
+    ports:
+      - 8080:8080
+    container_name: airflow_webserver
+    restart: always
+    depends_on:
+      - airflow-init
+    networks:
+      - airflow_network
+
+  airflow-scheduler:
+    << : *airflow-common
+    command: airflow scheduler
+    container_name: airflow_scheduler
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 8s
+        max_attempts: 3
+    depends_on:
+      - airflow-init
+    networks:
+      - airflow_network
+
+  minio:
+    image: 'bitnami/minio:latest'
+    restart: always
+    volumes:
+    - miniovolume:/data
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      - MINIO_ROOT_USER=minio-access-key
+      - MINIO_ROOT_PASSWORD=minio-secret-key
+    networks:
+      - airflow_network
+
+  stations_alerts_db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=stations_alerts
+      - POSTGRES_PORT=5433
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    command: -p 5433
+    volumes:
+    - postgres_data:/var/lib/postgresql/data/pgdata
+    - ./initial_files/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - 5433:5433
+    networks:
+      - airflow_network
+
+  filler:
+    image: python:latest
+    working_dir: /var
+    volumes:
+    - ./setting/filler/init_data.csv:/var/init_data.csv
+    - ./setting/filler/filling_station_errors.py:/var/filling_station_errors.py
+    - ./setting/filler/requirements.txt:/var/requirements.txt
+    command: >
+      bash -c "pip install -r requirements.txt
+               && python filling_station_errors.py"
+    depends_on:
+      - stations_alerts_db
+    networks:
+      - airflow_network
+
+  sender:
+    image: python:latest
+    working_dir: /var
+    volumes:
+    - ./setting/sender/alerts.csv:/var/alerts.csv
+    - ./setting/sender/sending_new_alerts.py:/var/alerts_sender.py
+    - ./setting/sender/requirements.txt:/var/requirements.txt
+    command: >
+      bash -c "pip install -r requirements.txt
+               && sleep 60 
+               && python filling_station_errors.py"
+    depends_on:
+      - stations_alerts_db
+    networks:
+      - airflow_network
